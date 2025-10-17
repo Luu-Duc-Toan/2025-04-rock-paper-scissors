@@ -2,11 +2,16 @@
 
 ## Summary
 
-`_handleTie()` and `_cancelGame()` have DoS vulnerable code
+`_handleTie()` and `_cancelGame()` are vulnerable to DoS attacks. A malicious player can deploy a contract that reverts on ETH transfer, permanently locking all game funds.
 
-## Finding Description
+## Description
 
-The contract uses direct ETH transfers with `require`, which make it vulnerable to DoS attack:
+### Normal Behavior
+
+- Players receive refunds when an ETH game ends in a tie
+- Players receive refunds when both fail to reveal moves (timeout cancellation)
+
+### Issue
 
 ```solidity
 function _handleTie(uint256 _gameId) internal {
@@ -37,47 +42,41 @@ function _cancelGame(uint256 _gameId) internal {
 }
 ```
 
-A malicious player can deploy a contract without `receive()` or `fallback()` functions, causing ETH transfers to that address fail and revert the entire transaction.
+Both functions use direct ETH transfers with `require`, causing the entire transaction to revert if any transfer fails. A malicious player can revert their receive function to block all refunds.
 
-## Severity
+## Risk
 
-**Medium** - Permanent fund lockup and game disruption:
+### Impact
 
-- **ETH permanently locked**: No rescue mechanism exists for stuck funds
-- **Game corruption**: Games become unresolvable, blocking legitimate gameplay
-- **Economic griefing**: Losing players can refuse to pay penalties by blocking transfers
-- **Platform instability**: Accumulation of locked games degrades user experience
+**High**
+
+- All game funds permanently locked in contract
+- No recovery mechanism exists
+- Honest players lose their collateral
+
+### Likelihood
+
+**Medium**
+
+- Easy to execute (simple reverting contract)
+- Works in tie scenarios and timeout cancellations
+- Attacker also loses their bet, reducing financial incentive but enables griefing
 
 ## Proof of Concept
 
 ### Textual PoC
 
-1. Create a contract without `fallback()`/`receive()`
-2. Use this contract to join a game &rarr; `game.playerB = attackerContract`
-3. In finalizing phrase, `game` contract sending `attackerContract` &rarr; always `revert()`
+1. Player create a game with eth
+2. Attacker join the game by his malicious contract (fallback consume all gas/revert)
+3. PLayer and attacker play until the game tie or both forget to reveal move
+   _Note: attacker can commit same move and then reveal same salt with player to ensure the game tie_
+4. When `_handleTie()` or `_cancelGame()` tries to refund, the malicious contract reverts
 
 ### Coded PoC
 
-1. Create new [foundry](https://getfoundry.sh/) project
-2. Add [Demo](../test/DoS.t.sol) to `test/`
-3. Execute
+[DoS.t.sol](../test/DoS.t.sol)
 
-```bash
-forge test --mp test/DoS.t.sol
-```
-
-5. You should see the following output
-
-```bash
-Ran 2 tests for test/DoS.t.sol:JoiningWrongGameTypeTest
-[PASS] test_dos_cancelGame() (gas: 405906)
-[PASS] test_dos_finishGame() (gas: 472579)
-Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 1.28ms (507.30µs CPU time)
-
-Ran 1 test suite in 11.21ms (1.28ms CPU time): 2 tests passed, 0 failed, 0 skipped (2 total tests)
-```
-
-## Recommendation
+## Recommended Mitigation
 
 1. Implement [Withdrawal pattern](https://blog.b9lab.com/the-solidity-withdrawal-pattern-1602cb32f1a5)
 
