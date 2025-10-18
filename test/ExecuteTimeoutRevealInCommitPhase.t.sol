@@ -106,8 +106,10 @@ contract RockPaperScissorsTest is Test {
         // Turn 3
         commitMove(playerA, gameId_, uint8(RockPaperScissors.Move.Scissors));
 
-        uint256 turn2RevealTime = block.timestamp + TIMEOUT;
-        vm.warp(turn2RevealTime + 1);
+        (, , , , uint256 revealDeadline, , , , , , , , , , , ) = game.games(
+            gameId_
+        );
+        vm.warp(revealDeadline + 1);
         vm.prank(playerB);
         game.timeoutReveal(gameId_);
     }
